@@ -146,7 +146,6 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		fp = fp
 		dirs := strings.Split(fp, "/")
 		var fsPath []string
 		var zipFile string
@@ -197,6 +196,8 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 
 			return
 		}
+
+		fp = path.Join(c.srvDir, fp)
 
 		fi, err := os.Lstat(fp)
 		if err != nil {
