@@ -165,8 +165,9 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if len(zipFile) > 0 {
-			zipFilePath := path.Join(c.srvDir, path.Join(append(fsPath, zipFile)...))
-			z, err := zip.OpenReader(zipFilePath)
+			relZipFilePath := path.Join(append(fsPath, zipFile)...)
+			absZipFilePath := path.Join(c.srvDir, relZipFilePath)
+			z, err := zip.OpenReader(absZipFilePath)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -175,7 +176,7 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 			_, isDownload := r.URL.Query()["download"]
 
 			if isDownload {
-				fp, _ := filepath.Abs(fp)
+				fp, _ := filepath.Abs(absZipFilePath)
 				f, _ := os.Open(fp)
 				defer f.Close()
 				http.ServeContent(w, r, fp, time.Time{}, f)
@@ -186,12 +187,12 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 				fi, _ := fs.Stat(z, zipInternalPath)
 				if fi.IsDir() {
 					fdir, _ := fs.ReadDir(z, zipInternalPath)
-					err = renderZipFolderListing(w, r, fdir, path.Join(zipFilePath, zipInternalPath))
+					err = renderZipFolderListing(w, r, fdir, path.Join(relZipFilePath, zipInternalPath))
 				} else {
 					io.Copy(w, f)
 				}
 			} else {
-				err = renderZipListing(w, r, z.Reader, zipFilePath)
+				err = renderZipListing(w, r, z.Reader, relZipFilePath)
 			}
 
 			return
