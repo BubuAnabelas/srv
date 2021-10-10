@@ -84,12 +84,12 @@ func renderZipFolderListing(w http.ResponseWriter, r *http.Request, f []fs.DirEn
 		switch m := fi.Type(); {
 		// is a directory - render a link
 		case m&os.ModeDir != 0:
-			fmt.Fprintf(w, "<tr><td><a href=\"%s\">%s</a></td></tr>", fnEscaped, fn)
+			fmt.Fprintf(w, "<tr><td><a href=\"/%s\">%s</a></td></tr>", fnEscaped, fn)
 		// is a regular file - render both a link and a file size
 		case m&os.ModeType == 0:
 			finfo, _ := fi.Info()
 			fs := humanize.FileSize(finfo.Size())
-			fmt.Fprintf(w, "<tr><td><a href=\"%s\">%s</a></td><td>%s</td></tr>", fnEscaped, fn, fs)
+			fmt.Fprintf(w, "<tr><td><a href=\"/%s\">%s</a></td><td>%s</td></tr>", fnEscaped, fn, fs)
 		// otherwise, don't render a clickable link
 		default:
 			fmt.Fprintf(w, "<tr><td><p style=\"color: #777\">%s</p></td></tr>", fn)
@@ -112,11 +112,11 @@ func renderZipListing(w http.ResponseWriter, r *http.Request, f zip.Reader, pare
 		switch m := fi.Mode(); {
 		// is a directory - render a link
 		case m&os.ModeDir != 0 && len(strings.Split(strings.TrimSuffix(fn, "/"), "/")) == 1:
-			fmt.Fprintf(w, "<tr><td><a href=\"%s\">%s</a></td></tr>", fnEscaped, fn)
+			fmt.Fprintf(w, "<tr><td><a href=\"/%s\">%s</a></td></tr>", fnEscaped, fn)
 		// is a regular file - render both a link and a file size
 		case m&os.ModeType == 0 && len(strings.Split(fn, "/")) == 1:
 			fs := humanize.FileSize(int64(fi.UncompressedSize64))
-			fmt.Fprintf(w, "<tr><td><a href=\"%s\">%s</a></td><td>%s</td></tr>", fnEscaped, fn, fs)
+			fmt.Fprintf(w, "<tr><td><a href=\"/%s\">%s</a></td><td>%s</td></tr>", fnEscaped, fn, fs)
 			// otherwise, don't render a clickable link
 			//default:
 			//	fmt.Fprintf(w, "<tr><td><p style=\"color: #777\">%s</p></td></tr>", fn)
@@ -147,15 +147,27 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		fp = path.Join(c.srvDir, fp)
-		dir, possibleFile := path.Split(fp)
 		dirs := strings.Split(fp, "/")
+		var fsPath []string
+		var zipFile string
+		var zipPath []string
 		if len(dirs) > 0 {
-			dir = dirs[0]
-			possibleFile = strings.Join(dirs[1:], "/")
+			for _, fpath := range dirs {
+				if len(zipFile) == 0 {
+					if isZip(fpath) {
+						zipFile = fpath
+					} else {
+						fsPath = append(fsPath, fpath)
+					}
+				} else {
+					zipPath = append(zipPath, fpath)
+				}
+			}
 		}
 
-		if isZip(dir) {
-			z, err := zip.OpenReader(dir)
+		if len(zipFile) > 0 {
+			zipFilePath := path.Join(append(fsPath, zipFile)...)
+			z, err := zip.OpenReader(zipFilePath)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -167,18 +179,19 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 				f, _ := os.Open(fp)
 				defer f.Close()
 				http.ServeContent(w, r, fp, time.Time{}, f)
-			} else if len(possibleFile) > 0 {
-				f, _ := z.Open(possibleFile)
+			} else if len(zipPath) > 0 {
+				zipInternalPath := path.Join(zipPath...)
+				f, _ := z.Open(zipInternalPath)
 				defer f.Close()
-				fi, _ := fs.Stat(z, possibleFile)
+				fi, _ := fs.Stat(z, zipInternalPath)
 				if fi.IsDir() {
-					fdir, _ := fs.ReadDir(z, possibleFile)
-					err = renderZipFolderListing(w, r, fdir, possibleFile)
+					fdir, _ := fs.ReadDir(z, zipInternalPath)
+					err = renderZipFolderListing(w, r, fdir, path.Join(zipFilePath, zipInternalPath))
 				} else {
 					io.Copy(w, f)
 				}
 			} else {
-				err = renderZipListing(w, r, z.Reader, dir)
+				err = renderZipListing(w, r, z.Reader, zipFilePath)
 			}
 
 			return
