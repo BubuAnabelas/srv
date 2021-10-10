@@ -5,9 +5,9 @@ GO_LDFLAGS := -ldflags "-s -w -X main.VERSION=$(VERSION)"
 GO_LDFLAGS_DEBUG := -ldflags "-X main.VERSION=$(VERSION)-DEBUG"
 GO_LDFLAGS_STATIC := -tags netgo -ldflags "-s -w -X main.VERSION=$(VERSION) -extldflags -static"
 
-.PHONY: build debug fmt lint clean release
+.PHONY: build debug fmt clean release
 
-build: clean fmt lint $(NAME)
+build: clean fmt $(NAME)
 
 $(NAME): main.go
 	go build $(GO_BUILDFLAGS) -o $@ $(GO_LDFLAGS) .
@@ -19,8 +19,6 @@ $(NAME)-debug: main.go
 fmt:
 	go fmt
 
-lint:
-	golint
 
 clean:
 	rm -f $(NAME) $(NAME)-debug

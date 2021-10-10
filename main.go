@@ -1,15 +1,19 @@
 package main
 
 import (
+	"archive/zip"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -26,6 +30,10 @@ type context struct {
 // so that the browser does not request the favicon.
 const listingPrelude = `<head><link rel=icon href=data:,><style>* { font-family: monospace; } table { border: none; margin: 1rem; } td { padding-right: 2rem; }</style></head>
 <table>`
+
+func isZip(s string) bool {
+	return mime.TypeByExtension(filepath.Ext(s)) == mime.TypeByExtension(".zip")
+}
 
 func renderListing(w http.ResponseWriter, r *http.Request, f *os.File) error {
 	files, err := f.Readdir(-1)
@@ -66,6 +74,59 @@ func renderListing(w http.ResponseWriter, r *http.Request, f *os.File) error {
 	return nil
 }
 
+func renderZipFolderListing(w http.ResponseWriter, r *http.Request, f []fs.DirEntry, parentPath string) error {
+	io.WriteString(w, listingPrelude)
+
+	var fnEscaped string
+	for _, fi := range f {
+		fn := fi.Name()
+		fnEscaped = path.Join(parentPath, url.PathEscape(fi.Name()))
+		switch m := fi.Type(); {
+		// is a directory - render a link
+		case m&os.ModeDir != 0:
+			fmt.Fprintf(w, "<tr><td><a href=\"%s\">%s</a></td></tr>", fnEscaped, fn)
+		// is a regular file - render both a link and a file size
+		case m&os.ModeType == 0:
+			finfo, _ := fi.Info()
+			fs := humanize.FileSize(finfo.Size())
+			fmt.Fprintf(w, "<tr><td><a href=\"%s\">%s</a></td><td>%s</td></tr>", fnEscaped, fn, fs)
+		// otherwise, don't render a clickable link
+		default:
+			fmt.Fprintf(w, "<tr><td><p style=\"color: #777\">%s</p></td></tr>", fn)
+		}
+	}
+
+	io.WriteString(w, "</table>")
+	return nil
+}
+
+func renderZipListing(w http.ResponseWriter, r *http.Request, f zip.Reader, parentPath string) error {
+
+	io.WriteString(w, listingPrelude)
+	fmt.Fprint(w, "<tr><td><a href=?download>download zip</a></td></tr>")
+
+	var fnEscaped string
+	for _, fi := range f.File {
+		fn := fi.Name
+		fnEscaped = path.Join(parentPath, url.PathEscape(fi.Name))
+		switch m := fi.Mode(); {
+		// is a directory - render a link
+		case m&os.ModeDir != 0 && len(strings.Split(strings.TrimSuffix(fn, "/"), "/")) == 1:
+			fmt.Fprintf(w, "<tr><td><a href=\"%s\">%s</a></td></tr>", fnEscaped, fn)
+		// is a regular file - render both a link and a file size
+		case m&os.ModeType == 0 && len(strings.Split(fn, "/")) == 1:
+			fs := humanize.FileSize(int64(fi.UncompressedSize64))
+			fmt.Fprintf(w, "<tr><td><a href=\"%s\">%s</a></td><td>%s</td></tr>", fnEscaped, fn, fs)
+			// otherwise, don't render a clickable link
+			//default:
+			//	fmt.Fprintf(w, "<tr><td><p style=\"color: #777\">%s</p></td></tr>", fn)
+		}
+	}
+
+	io.WriteString(w, "</table>")
+	return nil
+}
+
 func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 	// TODO: better log styling
 	log.Printf("\t%s [%s]: %s %s %s", r.RemoteAddr, r.UserAgent(), r.Method, r.Proto, r.Host+r.RequestURI)
@@ -79,12 +140,50 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 		// instead of r.URL.Path.
 		// XXX: Might also have to do QueryUnescape (and then also QueryEscape in the renderer),
 		// but haven't run into that as a need in my usage.
-		fp, err := url.PathUnescape(r.RequestURI)
+		fp, err := url.PathUnescape(r.URL.Path)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("failed to path unescape: %s", err), http.StatusInternalServerError)
 			return
 		}
+
 		fp = path.Join(c.srvDir, fp)
+		dir, possibleFile := path.Split(fp)
+		dirs := strings.Split(fp, "/")
+		if len(dirs) > 0 {
+			dir = dirs[0]
+			possibleFile = strings.Join(dirs[1:], "/")
+		}
+
+		if isZip(dir) {
+			z, err := zip.OpenReader(dir)
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer z.Close()
+
+			_, isDownload := r.URL.Query()["download"]
+
+			if isDownload {
+				f, _ := os.Open(fp)
+				defer f.Close()
+				http.ServeContent(w, r, fp, time.Time{}, f)
+			} else if len(possibleFile) > 0 {
+				f, _ := z.Open(possibleFile)
+				defer f.Close()
+				fi, _ := fs.Stat(z, possibleFile)
+				if fi.IsDir() {
+					fdir, _ := fs.ReadDir(z, possibleFile)
+					err = renderZipFolderListing(w, r, fdir, possibleFile)
+				} else {
+					io.Copy(w, f)
+				}
+			} else {
+				err = renderZipListing(w, r, z.Reader, dir)
+			}
+
+			return
+		}
+
 		fi, err := os.Lstat(fp)
 		if err != nil {
 			// NOTE: errors.Is is generally preferred, since it can unwrap errors created like so:
