@@ -146,7 +146,7 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		fp = path.Join(c.srvDir, fp)
+		fp = fp
 		dirs := strings.Split(fp, "/")
 		var fsPath []string
 		var zipFile string
@@ -166,7 +166,7 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if len(zipFile) > 0 {
-			zipFilePath := path.Join(append(fsPath, zipFile)...)
+			zipFilePath := path.Join(c.srvDir, path.Join(append(fsPath, zipFile)...))
 			z, err := zip.OpenReader(zipFilePath)
 			if err != nil {
 				log.Fatal(err)
@@ -176,6 +176,7 @@ func (c *context) handler(w http.ResponseWriter, r *http.Request) {
 			_, isDownload := r.URL.Query()["download"]
 
 			if isDownload {
+				fp, _ := filepath.Abs(fp)
 				f, _ := os.Open(fp)
 				defer f.Close()
 				http.ServeContent(w, r, fp, time.Time{}, f)
